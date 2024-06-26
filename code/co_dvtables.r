@@ -1,5 +1,6 @@
 ## Format CO DV spreadsheets based on template file
-co.dvtables <- function(year,type="DRAFT") {
+co.dvtables <- function(year=as.numeric(format(Sys.Date(),"%Y"))-1,
+  type=ifelse(as.numeric(format(Sys.Date(),"%m")) < 5,"DRAFT","FINAL")) {
   
   ## Custom functions called within main function
   max.na <- function(x) ifelse(any(!is.na(x)),max(x,na.rm=TRUE),NA)
@@ -21,17 +22,16 @@ co.dvtables <- function(year,type="DRAFT") {
   
   ## Set up working environment
   source("C:/Users/bwells01/Documents/R/get_monitors.r")
-  source("C:/Users/bwells01/Documents/R/xlsx_dv_funs.r")
-  require(plyr); require(reshape2); require(xlsx);
-  step1.date <- format(Sys.Date(),"%d%b%y"); years <- c((year-10):year);
+  source("C:/Users/bwells01/Documents/R/openxlsx_dvfuns.r")
+  require(openxlsx); require(plyr); require(reshape2); 
   dv.begin.date <- as.Date(paste(year-1,"01-01",sep="-"))
+  today <- format(Sys.Date(),"%x")
+  years <- c((year-10):year)
   
-  ## Get template file and sheets
+  ## Load template DV spreadsheet file
   templates <- list.files("DVs2xlsx/templates")
-  template.file <- templates[intersect(grep("CO",templates),grep(type,templates))]
-  dv.wb <- loadWorkbook(paste("DVs2xlsx/templates",template.file,sep="/"))
-  dv.sheets <- getSheets(dv.wb)
-
+  wb <- loadWorkbook(paste("DVs2xlsx/templates",templates[grep("CO",templates)],sep="/"))
+  
   ## Retrieve nonattainment area info from AQS
   naa.info <- get.naa.info(par=42101,psid=4)
   naa.states <- get.naa.states(naa.info)
@@ -42,6 +42,8 @@ co.dvtables <- function(year,type="DRAFT") {
   agency <- monitors$reporting_agency[!duplicated(monitors$id)]
   base_info <- monitors[!duplicated(monitors$id),c("epa_region","state_name","county_name",
     "cbsa_name","csa_name","site_name","address","latitude","longitude","naa_name_1971")]
+  base_info$latitude <- as.numeric(base_info$latitude)
+  base_info$longitude <- as.numeric(base_info$longitude)
   colnames(base_info)[ncol(base_info)] <- "naa_name"
   mbd <- get.unique.dates(monitors$monitor_begin_date,monitors$id,first=TRUE)
   med <- get.unique.dates(monitors$monitor_end_date,monitors$id,first=FALSE)
@@ -90,30 +92,22 @@ co.dvtables <- function(year,type="DRAFT") {
   combo_date <- sapply(substr(ids,1,9),function(x) ifelse(x %in% substr(combos$id,1,9),
     combos$combo_date[match(x,substr(combos$id,1,9))],ifelse(x %in% combos$combo_site,
     combos$combo_date[match(x,combos$combo_site)]," ")))
-  table0 <- data.frame(parameter="42101",site=substr(ids,1,9),poc=substr(ids,10,10),row.names=NULL)
-  if (type == "DRAFT") {
-    v_area <- ifelse(as.Date(mbd) >= as.Date(paste(year,"01-01",sep="-")) &
-      base_info$state_name %in% naa.states,"1"," ")
-    v_nonreg <- ifelse(nbd != " " & nrc == " " & as.Date(lsd) >= dv.begin.date,"1"," ")
-    v_nonref <- ifelse(non_ref != " " & nrc != "Y" & check.dates == TRUE &
-      as.Date(lsd) >= dv.begin.date,"1"," ")
-    v_closure <- ifelse(med == " " & nrc != "Y" & as.Date(lsd) >= dv.begin.date &
-      as.Date(lsd) <= as.Date(paste(year,"10-01",sep="-")),"1"," ")
-    v_spm <- ifelse(grepl("SPM",types) & nrc != "Y" & as.Date(lsd) >= dv.begin.date,
-      ifelse(med == " ",ifelse(as.Date(lsd) - as.Date(mbd) <= 730,"1"," "),
-      ifelse(as.Date(gsub(" ",as.character(Sys.Date()),med)) - as.Date(mbd) <= 730,"1"," "))," ")
-    v_combo <- ifelse(combo_site != " " & as.Date(gsub(" ","1999-01-01",combo_date)) >= dv.begin.date,"1"," ")
-    v_count <- (v_area != " ") + (v_nonreg != " ") + (v_nonref != " ") + (v_closure != " ") +
-      (v_spm != " ") + (v_combo != " ")
-    table0 <- cbind(table0,data.frame(v_count,v_area,v_nonreg,v_nonref,v_closure,v_spm,v_combo,row.names=NULL))
+  table0 <- data.frame(parameter="42101",site=substr(ids,1,9),poc=as.numeric(substr(ids,10,11)),
+    base_info,monitor_begin_date=mbd,monitor_end_date=med,last_sample_date=lsd,
+    primary_begin_date=pbd,primary_end_date=ped,nonreg_begin_date=nbd,nonreg_end_date=ned,
+    nonreg_concur=nrc,frm_fem,non_ref,combo_site,combo_date,agency,collection_frequency=cfr,
+    season_begin_date=sbd,season_end_date=sed,monitor_types=types,monitor_networks=nets,
+    measurement_scale=msc,monitor_objective=obj,row.names=NULL)
+  writeData(wb,sheet=13,x=table0,startCol=1,startRow=3,colNames=FALSE,rowNames=FALSE,na.string="")
+  clear.rows <- c((nrow(table0)+3):max(wb$worksheets[[13]]$sheet_data$rows))
+  removeRowHeights(wb,sheet=13,rows=clear.rows)
+  deleteData(wb,sheet=13,rows=clear.rows,cols=c(1:ncol(table0)),gridExpand=TRUE)
+  for (i in 1:ncol(table0)) {
+    addStyle(wb,sheet=13,style=createStyle(border=c("top","bottom","left","right"),borderStyle="none"),
+      rows=clear.rows,cols=i)
   }
-  table0 <- cbind(table0,data.frame(base_info,monitor_begin_date=mbd,monitor_end_date=med,
-    last_sample_date=lsd,primary_begin_date=pbd,primary_end_date=ped,nonreg_begin_date=nbd,
-    nonreg_end_date=ned,nonreg_concur=nrc,frm_fem,non_ref,combo_site,combo_date,agency,
-    collection_frequency=cfr,season_begin_date=sbd,season_end_date=sed,monitor_types=types,
-    monitor_networks=nets,measurement_scale=msc,monitor_objective=obj,row.names=NULL))
-  S <- ifelse(type == "DRAFT",1,length(dv.sheets))
-  df2xls(df=table0,sheet=dv.sheets[[S]],sr=3,sc=1)
+  addStyle(wb,sheet=13,style=createStyle(border="top",borderColour="black",borderStyle="thin"),
+    rows=min(clear.rows),cols=c(1:ncol(table0)))
   
   ## Pull CO DVs from AQS, merge with site metadata
   t <- get.aqs.data(paste(
@@ -122,14 +116,13 @@ co.dvtables <- function(year,type="DRAFT") {
       AND dv_year >=",years[2],
      "AND dv_year <=",year,
      "AND edt_id IN (0,5)
+      AND si_id != 92355
       AND state_code NOT IN ('80','CC')
     ORDER BY state_code, county_code, site_number, poc, dv_year",sep=""))
-  write.csv(t,file=paste("DVs2xlsx/",year,"/COdvs",year-9,"_",year,"_",
-    format(Sys.Date(),"%Y%m%d"),".csv",sep=""),na="",row.names=FALSE)
   dvs.co <- data.frame(site=paste(t$state_code,t$county_code,t$site_number,sep=""),
-    poc=t$poc,dv_year=t$dv_year,
-    dv_1hr=t$co_1hr_2nd_max_value,dt_1hr=as.character(t$co_8hr_2nd_max_date_time),
-    dv_8hr=t$co_8hr_2nd_max_value,dt_8hr=as.character(t$co_8hr_2nd_max_date_time))   
+    poc=t$poc,dv_year=as.integer(t$dv_year),
+    dv_1hr=as.numeric(t$co_1hr_2nd_max_value),dt_1hr=as.character(t$co_1hr_2nd_max_date_time),
+    dv_8hr=as.numeric(t$co_8hr_2nd_max_value),dt_8hr=as.character(t$co_8hr_2nd_max_date_time))   
   sites <- table0[,c("site","poc","epa_region","state_name","county_name",
    "cbsa_name","csa_name","naa_name","site_name","address","latitude","longitude")]
   dvs <- merge(sites,dvs.co,by=c("site","poc"))
@@ -138,6 +131,9 @@ co.dvtables <- function(year,type="DRAFT") {
     (as.Date(gsub(" ",Sys.Date(),table0$monitor_end_date)) - as.Date(table0$monitor_begin_date) <= 730 |
      as.Date(table0$last_sample_date) - as.Date(table0$monitor_begin_date) <= 730))]
   dvs$valid[which(paste(dvs$site,dvs$poc,sep="") %in% spm.check)] <- FALSE
+  t$dv_validity_ind <- sapply(dvs$valid,function(x) ifelse(x,"Y","N"))
+  write.csv(t,file=paste("DVs2xlsx/",year,"/COdvs",year-9,"_",year,"_",
+    format(Sys.Date(),"%Y%m%d"),".csv",sep=""),na="",row.names=FALSE)
   
   ## Table 1a. NAA Status 8hr
   t <- subset(dvs,naa_name != " " & dv_year == year & valid,c("naa_name","dv_8hr"))
@@ -145,13 +141,10 @@ co.dvtables <- function(year,type="DRAFT") {
   table1a <- merge(naa.info,t,by="naa_name",all=TRUE)[,c("naa_name","epa_regions","status","dv_8hr")]
   table1a$met_naaqs <- sapply(table1a$dv_8hr,function(x) ifelse(is.na(x),"No Data",
     ifelse(x > 9,"No","Yes")))
-  S <- ifelse(type == "DRAFT",2,1)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4,co=TRUE)
-  df2xls(df=table1a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=84,col=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=88,col=1)
+  writeData(wb,sheet=1,x=table1a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=1,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),today)),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=1,years,co=TRUE); set.footnote.dates(wb,sheet=1);
   
   ## Table 1b. NAA Status 1hr
   t <- subset(dvs,naa_name != " " & dv_year == year & valid,c("naa_name","dv_1hr"))
@@ -159,13 +152,10 @@ co.dvtables <- function(year,type="DRAFT") {
   table1b <- merge(naa.info,t,by="naa_name",all=TRUE)[,c("naa_name","epa_regions","status","dv_1hr")]
   table1b$met_naaqs <- sapply(table1b$dv_1hr,function(x) ifelse(is.na(x),"No Data",
     ifelse(x > 35,"No","Yes")))
-  S <- ifelse(type == "DRAFT",3,2)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4,co=TRUE)
-  df2xls(df=table1b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=84,col=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=88,col=1)
+  writeData(wb,sheet=2,x=table1b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=2,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),today)),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=2,years,co=TRUE); set.footnote.dates(wb,sheet=2);
   
   ## Table 2a. Other Violators 8hr
   t <- subset(dvs,naa_name == " " & dv_year == year & dv_8hr > 9)
@@ -182,12 +172,10 @@ co.dvtables <- function(year,type="DRAFT") {
   if (nrow(t) > 0) {
     table2a <- t[,c("state_name","county_name","epa_region","site","poc","dv_8hr","cbsa_name")]
   }
-  S <- ifelse(type == "DRAFT",4,3)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4,co=TRUE)
-  df2xls(df=table2a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=10,col=1)
+  writeData(wb,sheet=3,x=table2a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=3,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=3,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=3,years,co=TRUE); set.footnote.dates(wb,sheet=3);
   
   ## Table 2b. Other Violators 1hr
   t <- subset(dvs,naa_name == " " & dv_year == year & dv_1hr > 35)
@@ -204,12 +192,10 @@ co.dvtables <- function(year,type="DRAFT") {
   if (nrow(t) > 0) {
     table2b <- t[,c("state_name","county_name","epa_region","site","poc","dv_1hr","cbsa_name")]
   }
-  S <- ifelse(type == "DRAFT",5,4)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4,co=TRUE)
-  df2xls(df=table2b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=10,col=1)
+  writeData(wb,sheet=4,x=table2b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=4,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=4,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=4,years,co=TRUE); set.footnote.dates(wb,sheet=4);
   
   ## Table 3a. NAA Trends 8hr
   temp <- subset(dvs,naa_name != " " & valid)
@@ -223,12 +209,10 @@ co.dvtables <- function(year,type="DRAFT") {
       table3a[i,paste("dv",(y-1),y,sep="_")] <- max(v$dv_8hr)
     }
   }
-  S <- ifelse(type == "DRAFT",6,5)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4,co=TRUE)
-  df2xls(df=table3a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=86,col=1)
+  writeData(wb,sheet=5,x=table3a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=5,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),today)),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=5,years,co=TRUE); set.footnote.dates(wb,sheet=5);
   
   ## Table 3b. NAA Trends 1hr
   temp <- subset(dvs,naa_name != " " & valid)
@@ -242,12 +226,10 @@ co.dvtables <- function(year,type="DRAFT") {
       table3b[i,paste("dv",(y-1),y,sep="_")] <- max(v$dv_1hr)
     }
   }
-  S <- ifelse(type == "DRAFT",7,6)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4,co=TRUE)
-  df2xls(df=table3b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=86,col=1)
+  writeData(wb,sheet=6,x=table3b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=6,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),today)),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=6,years,co=TRUE); set.footnote.dates(wb,sheet=6);
   
   ## Table 4a. County Status 8hr
   t <- subset(dvs,dv_year == year & valid,c("site","poc","state_name","county_name",
@@ -258,13 +240,11 @@ co.dvtables <- function(year,type="DRAFT") {
     state_fips=substr(t$fips,1,2),county_fips=substr(t$fips,3,5),epa_region=t$epa_region,
     site=t$site,poc=t$poc,dv=t$dv_8hr,cbsa_name=t$cbsa_name)
   table4a <- table4a[order(table4a$state_name,table4a$county_name),]
-  S <- ifelse(type == "DRAFT",8,7)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4,co=TRUE)
-  df2xls(df=table4a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=189,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,63,15,63,15,95,15))
+  writeData(wb,sheet=7,x=table4a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=7,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=7,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=7,years,co=TRUE); set.footnote.dates(wb,sheet=7);
+  remove.extra.rows(wb,sheet=7,row.hts=c(15,63,15,63,15,95,15))
   
   ## Table 4b. County Status 1hr
   t <- subset(dvs,dv_year == year & valid,c("site","poc","state_name","county_name",
@@ -275,13 +255,11 @@ co.dvtables <- function(year,type="DRAFT") {
     state_fips=substr(t$fips,1,2),county_fips=substr(t$fips,3,5),epa_region=t$epa_region,
     site=t$site,poc=t$poc,dv=t$dv_1hr,cbsa_name=t$cbsa_name)
   table4b <- table4b[order(table4b$state_name,table4b$county_name),]
-  S <- ifelse(type == "DRAFT",9,8)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4,co=TRUE)
-  df2xls(df=table4b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=189,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,63,15,63,15,95,15))
+  writeData(wb,sheet=8,x=table4b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=8,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=8,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=8,years,co=TRUE); set.footnote.dates(wb,sheet=8);
+  remove.extra.rows(wb,sheet=8,row.hts=c(15,63,15,63,15,95,15))
   
   ## Table 5a. Monitor Status 8hr
   t <- subset(dvs,dv_year == year)
@@ -289,13 +267,11 @@ co.dvtables <- function(year,type="DRAFT") {
   t$invalid_dv <- mapply(function(dv,valid) ifelse(valid,NA,dv),t$dv_8hr,t$valid)
   table5a <- t[,c("state_name","county_name","cbsa_name","csa_name","naa_name","epa_region",
     "site","poc","site_name","address","latitude","longitude","valid_dv","invalid_dv","dt_8hr")]
-  S <- ifelse(type == "DRAFT",10,9)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4,co=TRUE)
-  df2xls(df=table5a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=309,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,47,15,63,15,79,15))
+  writeData(wb,sheet=9,x=table5a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=9,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=9,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=9,years,co=TRUE); set.footnote.dates(wb,sheet=9);
+  remove.extra.rows(wb,sheet=9,row.hts=c(15,31,15,47,15,79,15))
   
   ## Table 5b. Monitor Status 1hr
   t <- subset(dvs,dv_year == year)
@@ -303,13 +279,11 @@ co.dvtables <- function(year,type="DRAFT") {
   t$invalid_dv <- mapply(function(dv,valid) ifelse(valid,NA,dv),t$dv_1hr,t$valid)
   table5b <- t[,c("state_name","county_name","cbsa_name","csa_name","naa_name","epa_region",
     "site","poc","site_name","address","latitude","longitude","valid_dv","invalid_dv","dt_1hr")]
-  S <- ifelse(type == "DRAFT",11,10)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4,co=TRUE)
-  df2xls(df=table5b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=309,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,47,15,63,15,79,15))
+  writeData(wb,sheet=10,x=table5b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=10,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=10,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=10,years,co=TRUE); set.footnote.dates(wb,sheet=10);
+  remove.extra.rows(wb,sheet=10,row.hts=c(15,31,15,47,15,79,15))
   
   ## Table 6a. Monitor Trends 8hr
   t <- dcast(subset(dvs,valid),site + poc ~ dv_year,value.var="dv_8hr")
@@ -317,13 +291,11 @@ co.dvtables <- function(year,type="DRAFT") {
   table6a <- merge(sites,t,by=c("site","poc"))[,c("state_name","county_name","cbsa_name",
     "csa_name","naa_name","epa_region","site","poc","site_name","address","latitude","longitude",
      paste("dv",years[1:10],years[2:11],sep="_"))]
-  S <- ifelse(type == "DRAFT",12,11)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4,co=TRUE)
-  df2xls(df=table6a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=509,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,47,15,63,15,79,15))
+  writeData(wb,sheet=11,x=table6a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=11,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=11,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=11,years,co=TRUE); set.footnote.dates(wb,sheet=11);
+  remove.extra.rows(wb,sheet=11,row.hts=c(15,47,15,47,15,79,15))
   
   ## Table 6b. Monitor Trends 1hr
   t <- dcast(subset(dvs,valid),site + poc ~ dv_year,value.var="dv_1hr")
@@ -331,15 +303,13 @@ co.dvtables <- function(year,type="DRAFT") {
   table6b <- merge(sites,t,by=c("site","poc"))[,c("state_name","county_name","cbsa_name",
     "csa_name","naa_name","epa_region","site","poc","site_name","address","latitude","longitude",
      paste("dv",years[1:10],years[2:11],sep="_"))]
-  S <- ifelse(type == "DRAFT",13,12)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4,co=TRUE)
-  df2xls(df=table6b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=509,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,47,15,63,15,79,15))
+  writeData(wb,sheet=12,x=table6b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=12,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=12,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=12,years,co=TRUE); set.footnote.dates(wb,sheet=12);
+  remove.extra.rows(wb,sheet=12,row.hts=c(15,47,15,47,15,79,15))
   
   ## Write DV tables to Excel File
   file.xlsx <- paste("CO_DesignValues",year-1,year,type,format(Sys.Date(),"%m_%d_%y"),sep="_")
-  saveWorkbook(dv.wb,file=paste("DVs2xlsx/",year,"/",file.xlsx,".xlsx",sep=""))
+  saveWorkbook(wb,file=paste("DVs2xlsx/",year,"/",file.xlsx,".xlsx",sep=""),overwrite=TRUE)
 }

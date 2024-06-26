@@ -1,5 +1,7 @@
 ## Format O3 DV spreadsheets based on template file
-o3.dvtables <- function(years,step1.date,type="DRAFT") {
+o3.dvtables <- function(years=as.numeric(format(Sys.Date(),"%Y"))-c(12:1),
+  step1.date=toupper(format(Sys.Date(),"%d%b%y")),
+  type=ifelse(as.numeric(format(Sys.Date(),"%m")) < 5,"DRAFT","FINAL")) {
   
   ## Custom functions called within main function
   max.na <- function(x) ifelse(any(!is.na(x)),max(x,na.rm=TRUE),NA)
@@ -21,10 +23,12 @@ o3.dvtables <- function(years,step1.date,type="DRAFT") {
   
   ## Set up working environment
   source("C:/Users/bwells01/Documents/R/get_monitors.r")
-  source("C:/Users/bwells01/Documents/R/xlsx_dv_funs.r")
-  require(plyr); require(xlsx);
-  ny <- length(years); dvyr1 <- years[(ny-2)]; dvyr2 <- years[(ny-1)]; dvyr3 <- years[ny];
+  source("C:/Users/bwells01/Documents/R/openxlsx_dvfuns.r")
+  require(openxlsx); require(plyr);
+  ny <- length(years); today <- format(Sys.Date(),"%x");
+  dvyr1 <- years[(ny-2)]; dvyr2 <- years[(ny-1)]; dvyr3 <- years[ny];
   dv.begin.date <- as.Date(paste(dvyr1,"01-01",sep="-"))
+  aqs.date <- format(as.Date(step1.date,format="%d%b%y"),"%x")
   cur <- paste(c("dv","ee","code"),dvyr1,dvyr3,sep=".")
   all <- paste(rep(c("dv","code"),times=(ny-2)),rep(paste(c(years[1]:dvyr1),
     c((years[1]+2):dvyr3),sep="."),each=2),sep=".")
@@ -33,9 +37,7 @@ o3.dvtables <- function(years,step1.date,type="DRAFT") {
   
   ## Get template file and sheets
   templates <- list.files("DVs2xlsx/templates")
-  template.file <- templates[intersect(grep("O3",templates),grep(type,templates))]
-  dv.wb <- loadWorkbook(paste("DVs2xlsx/templates",template.file,sep="/"))
-  dv.sheets <- getSheets(dv.wb)
+  wb <- loadWorkbook(paste("DVs2xlsx/templates",templates[grep("O3",templates)],sep="/"))
   
   ## Load site-level DV files (created by dvs_step1.r)
   file.base <- paste(work.dir,"dv_",years[1],"_",years[ny],sep="")
@@ -94,6 +96,8 @@ o3.dvtables <- function(years,step1.date,type="DRAFT") {
   base_info <- monitors[!duplicated(monitors$id),c("epa_region","state_name","county_name",
     "cbsa_name","csa_name","site_name","address","latitude","longitude",
     "naa_name_2015","naa_name_2008","naa_name_1997","naa_name_1979")]
+  base_info$latitude <- as.numeric(base_info$latitude)
+  base_info$longitude <- as.numeric(base_info$longitude)
   mbd <- get.unique.dates(monitors$monitor_begin_date,monitors$id,first=TRUE)
   med <- get.unique.dates(monitors$monitor_end_date,monitors$id,first=FALSE)
   lsd <- get.unique.dates(monitors$last_sample_date,monitors$id,first=FALSE)
@@ -141,153 +145,126 @@ o3.dvtables <- function(years,step1.date,type="DRAFT") {
   combo_date <- sapply(substr(ids,1,9),function(x) ifelse(x %in% substr(combos$id,1,9),
     combos$combo_date[match(x,substr(combos$id,1,9))],ifelse(x %in% combos$combo_site,
     combos$combo_date[match(x,combos$combo_site)]," ")))
-  table0 <- data.frame(parameter="44201",site=substr(ids,1,9),poc=substr(ids,10,10),row.names=NULL)
-  if (type == "DRAFT") {
-    v_area <- ifelse(as.Date(mbd) >= as.Date(paste(dvyr3,"01-01",sep="-")) &
-      base_info$state_name %in% naa.states,"1"," ")
-    v_nonreg <- ifelse(nbd != " " & nrc == " " & as.Date(lsd) >= dv.begin.date,"1"," ")
-    v_nonref <- ifelse(non_ref != " " & nrc != "Y" & check.dates == TRUE &
-      as.Date(lsd) >= dv.begin.date,"1"," ")
-    v_closure <- ifelse(med == " " & nrc != "Y" & as.Date(lsd) >= dv.begin.date &
-      as.Date(lsd) <= as.Date(paste(dvyr3,"09-01",sep="-")),"1"," ")
-    v_spm <- ifelse(grepl("SPM",types) & nrc != "Y" & as.Date(lsd) >= dv.begin.date,
-      ifelse(med == " ",ifelse(as.Date(lsd) - as.Date(mbd) <= 730,"1"," "),
-      ifelse(as.Date(gsub(" ",as.character(Sys.Date()),med)) - as.Date(mbd) <= 730,"1"," "))," ")
-    v_combo <- ifelse(combo_site != " " & as.Date(gsub(" ","1999-01-01",combo_date)) >= dv.begin.date,"1"," ")
-    v_count <- (v_area != " ") + (v_nonreg != " ") + (v_nonref != " ") + (v_closure != " ") +
-      (v_spm != " ") + (v_combo != " ")
-    table0 <- cbind(table0,data.frame(v_count,v_area,v_nonreg,v_nonref,v_closure,v_spm,v_combo,row.names=NULL))
+  table0 <- data.frame(parameter="44201",site=substr(ids,1,9),poc=as.numeric(substr(ids,10,11)),
+    base_info,monitor_begin_date=mbd,monitor_end_date=med,last_sample_date=lsd,
+    primary_begin_date=pbd,primary_end_date=ped,nonreg_begin_date=nbd,nonreg_end_date=ned,
+    nonreg_concur=nrc,frm_fem,non_ref,combo_site,combo_date,agency,collection_frequency=cfr,
+    season_begin_date=sbd,season_end_date=sed,monitor_types=types,monitor_networks=nets,
+    measurement_scale=msc,monitor_objective=obj,row.names=NULL)
+  writeData(wb,sheet=12,x=table0,startCol=1,startRow=3,colNames=FALSE,rowNames=FALSE,na.string="")
+  clear.rows <- c((nrow(table0)+3):max(wb$worksheets[[12]]$sheet_data$rows))
+  removeRowHeights(wb,sheet=12,rows=clear.rows)
+  deleteData(wb,sheet=12,rows=clear.rows,cols=c(1:ncol(table0)),gridExpand=TRUE)
+  for (i in 1:ncol(table0)) {
+    addStyle(wb,sheet=12,style=createStyle(border=c("top","bottom","left","right"),borderStyle="none"),
+      rows=clear.rows,cols=i)
   }
-  table0 <- cbind(table0,data.frame(base_info,monitor_begin_date=mbd,monitor_end_date=med,
-    last_sample_date=lsd,primary_begin_date=pbd,primary_end_date=ped,nonreg_begin_date=nbd,
-    nonreg_end_date=ned,nonreg_concur=nrc,frm_fem,non_ref,combo_site,combo_date,agency,
-    collection_frequency=cfr,season_begin_date=sbd,season_end_date=sed,monitor_types=types,
-    monitor_networks=nets,measurement_scale=msc,monitor_objective=obj,row.names=NULL))
-  S <- ifelse(type == "DRAFT",1,length(dv.sheets))
-  df2xls(df=table0,sheet=dv.sheets[[S]],sr=3,sc=1)
+  addStyle(wb,sheet=12,style=createStyle(border="top",borderColour="black",borderStyle="thin"),
+    rows=min(clear.rows),cols=c(1:ncol(table0)))
   
   ## Table 1a: 2015 8-hour NAAQS nonattainment area status
-  temp <- subset(dv.2015,naa_name != " ")[,c("naa_name",all)]
+  temp <- subset(dv.2015,naa_name_2015 != " ")[,c("naa_name_2015",all)]
   temp[,grep("dv",colnames(temp))] <- mapply(function(dv,code) ifelse(code == "I",NA,dv),
     temp[,grep("dv",colnames(temp))],temp[,grep("code",colnames(temp))])
-  vals <- tapply(temp[,cur[1]],list(temp$naa_name),max.na)
+  vals <- tapply(temp[,cur[1]],list(temp$naa_name_2015),max.na)
   meets.naaqs <- tapply(temp[,cur[3]],list(temp$naa_name),met.naaqs)
   table1a <- data.frame(naa.2015[,c("naa_name","epa_regions","status","classification")],dv=vals/1000,
     meets_naaqs=meets.naaqs,naa.2015[,c("cdd_date","redesignation_date")],row.names=c(1:length(vals)))
-  S <- ifelse(type == "DRAFT",2,1)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table1a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=59,col=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=63,col=1)
+  writeData(wb,sheet=1,x=table1a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=1,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),c(aqs.date,today))),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=1,years); set.footnote.dates(wb,sheet=1);
   
   ## Table 1b: 2008 8-hour NAAQS nonattainment area status
-  temp <- subset(dv.2008,naa_name != " ")[,c("naa_name",all)]
+  temp <- subset(dv.2008,naa_name_2008 != " ")[,c("naa_name_2008",all)]
   temp[,grep("dv",colnames(temp))] <- mapply(function(dv,code) ifelse(code == "I",NA,dv),
     temp[,grep("dv",colnames(temp))],temp[,grep("code",colnames(temp))])
-  vals <- tapply(temp[,cur[1]],list(temp$naa_name),max.na)
+  vals <- tapply(temp[,cur[1]],list(temp$naa_name_2008),max.na)
   meets.naaqs <- tapply(temp[,cur[3]],list(temp$naa_name),met.naaqs)
   table1b <- data.frame(naa.2008[,c("naa_name","epa_regions","status","classification")],dv=vals/1000,
     meets_naaqs=meets.naaqs,naa.2008[,c("cdd_date","redesignation_date")],row.names=c(1:length(vals)))
-  S <- ifelse(type == "DRAFT",3,2)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table1b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=54,col=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=58,col=1)
+  writeData(wb,sheet=2,x=table1b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=2,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),c(aqs.date,today))),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=2,years); set.footnote.dates(wb,sheet=2);
   
   ## Table 1c: 1997 8-hour NAAQS nonattainment area status
   naa.1997 <- naa.1997[order(naa.1997$naa_name),]
-  temp <- subset(dv.1997,naa_name != " ")[,c("naa_name",all)]
+  temp <- subset(dv.1997,naa_name_1997 != " ")[,c("naa_name_1997",all)]
   temp[,grep("dv",colnames(temp))] <- mapply(function(dv,code) ifelse(code == "I",NA,dv),
     temp[,grep("dv",colnames(temp))],temp[,grep("code",colnames(temp))])
   vals <- tapply(temp[,cur[1]],list(temp$naa_name),max.na)
-  meets.naaqs <- tapply(temp[,cur[3]],list(temp$naa_name),met.naaqs)
+  meets.naaqs <- tapply(temp[,cur[3]],list(temp$naa_name_1997),met.naaqs)
   table1c <- data.frame(naa.1997[,c("naa_name","epa_regions","status","classification")],dv=vals/1000,
     meets_naaqs=meets.naaqs,naa.1997[,c("cdd_date","redesignation_date")],row.names=c(1:length(vals)))
-  S <- ifelse(type == "DRAFT",4,3)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table1c,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=123,col=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=127,col=1)
+  writeData(wb,sheet=3,x=table1c,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=3,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),c(aqs.date,today))),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=3,years); set.footnote.dates(wb,sheet=3);
   
   ## Table 1d: 1979 1-hour NAAQS nonattainment area status
-  temp <- subset(dv.1979,naa_name != " ")[,c("naa_name","epa_region",cur)]
-  regions <- unlist(tapply(temp$epa_region,list(temp$naa_name),
+  temp <- subset(dv.1979,naa_name_1979 != " ")[,c("naa_name_1979","epa_region",cur)]
+  regions <- unlist(tapply(temp$epa_region,list(temp$naa_name_1979),
     function(x) paste(unique(x[order(x)]),collapse=",")))
-  vals <- tapply(temp[,cur[1]],list(temp$naa_name),max.na)
-  exc <- tapply(temp[,cur[2]],list(temp$naa_name),max.na)
+  vals <- tapply(temp[,cur[1]],list(temp$naa_name_1979),max.na)
+  exc <- tapply(temp[,cur[2]],list(temp$naa_name_1979),max.na)
   meets.naaqs <- sapply(exc,function(x) ifelse(is.na(x),"Incomplete",ifelse(x <= 1,"Yes","No")))
   table1d <- data.frame(naa_name=names(regions),region=regions,dv=vals/1000,
     ee=exc,meets_naaqs=meets.naaqs,row.names=c(1:length(regions)))
-  S <- ifelse(type == "DRAFT",5,4)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table1d,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=140,col=1)
+  writeData(wb,sheet=4,x=table1d,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=4,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),c(aqs.date,today))),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=4,years); set.footnote.dates(wb,sheet=4);
   
   ## Table 2: Violating monitors outside 2015 8-hour NAAQS nonattainment areas
-  table2 <- dv.2015[which(dv.2015[,cur[3]] == "V" & dv.2015$naa_name == " "),
+  table2 <- dv.2015[which(dv.2015[,cur[3]] == "V" & dv.2015$naa_name_2015 == " "),
     c("state_name","county_name","epa_region","site",cur[1],"cbsa_name")]
   table2[,cur[1]] <- table2[,cur[1]]/1000
   colnames(table2) <- gsub(".","_",colnames(table2),fixed=TRUE)
-  S <- ifelse(type == "DRAFT",6,5)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table2,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=59,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,31,15,47,15,63,15))
+  writeData(wb,sheet=5,x=table2,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=5,x=paste("AQS Data Retrieval:",aqs.date),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=5,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=5,years); set.footnote.dates(wb,sheet=5);
+  remove.extra.rows(wb,sheet=5,row.hts=c(15,31,15,47,15,63,15))
   
   ## Table 3a: Trends in 2015 8-hour NAAQS nonattainment areas
-  temp <- subset(dv.2015,naa_name != " ")[,c("naa_name",all)]
+  temp <- subset(dv.2015,naa_name_2015 != " ")[,c("naa_name_2015",all)]
   temp[,grep("dv",colnames(temp))] <- mapply(function(dv,code) ifelse(code == "I",NA,dv),
     temp[,grep("dv",colnames(temp))],temp[,grep("code",colnames(temp))])
   vals <- apply(temp[,grep("dv",colnames(temp))],2,function(x)
-    tapply(x,list(temp$naa_name),max.na))
+    tapply(x,list(temp$naa_name_2015),max.na))
   table3a <- data.frame(naa.2015[,c("naa_name","epa_regions")],
     vals/1000,row.names=c(1:nrow(naa.2015)))
-  S <- ifelse(type == "DRAFT",7,6)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table3a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=61,col=1)
+  writeData(wb,sheet=6,x=table3a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=6,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),c(aqs.date,today))),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=6,years); set.footnote.dates(wb,sheet=6);
   
   ## Table 3b: Trends in 2008 8-hour NAAQS nonattainment areas
-  temp <- subset(dv.2008,naa_name != " ")[,c("naa_name",all)]
+  temp <- subset(dv.2008,naa_name_2008 != " ")[,c("naa_name_2008",all)]
   temp[,grep("dv",colnames(temp))] <- mapply(function(dv,code) ifelse(code == "I",NA,dv),
     temp[,grep("dv",colnames(temp))],temp[,grep("code",colnames(temp))])
   vals <- apply(temp[,grep("dv",colnames(temp))],2,function(x)
-    tapply(x,list(temp$naa_name),max.na))
+    tapply(x,list(temp$naa_name_2008),max.na))
   table3b <- data.frame(naa.2008[,c("naa_name","epa_regions")],
     vals/1000,row.names=c(1:nrow(naa.2008)))
-  S <- ifelse(type == "DRAFT",8,7)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table3b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=56,col=1)
+  writeData(wb,sheet=7,x=table3b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=7,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),c(aqs.date,today))),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=7,years); set.footnote.dates(wb,sheet=7);
   
   ## Table 3c: Trends in 1997 8-hour NAAQS nonattainment areas
-  temp <- subset(dv.1997,naa_name != " ")[,c("naa_name",all)]
+  temp <- subset(dv.1997,naa_name_1997 != " ")[,c("naa_name_1997",all)]
   temp[,grep("dv",colnames(temp))] <- mapply(function(dv,code) ifelse(code == "I",NA,dv),
     temp[,grep("dv",colnames(temp))],temp[,grep("code",colnames(temp))])
   vals <- apply(temp[,grep("dv",colnames(temp))],2,function(x)
-    tapply(x,list(temp$naa_name),max.na))
+    tapply(x,list(temp$naa_name_1997),max.na))
   table3c <- data.frame(naa.1997[,c("naa_name","epa_regions")],vals/1000,
     row.names=c(1:nrow(naa.1997)))
-  S <- ifelse(type == "DRAFT",9,8)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table3c,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=125,col=1)
+  writeData(wb,sheet=8,x=table3c,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=8,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),c(aqs.date,today))),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=8,years); set.footnote.dates(wb,sheet=8);
   
   ## Table 4: County-level design values for the 2015 8-hour NAAQS
   temp <- dv.2015[,c("site","state_name","county_name","epa_region","cbsa_name",cur[1],cur[3])]
@@ -299,17 +276,15 @@ o3.dvtables <- function(years,step1.date,type="DRAFT") {
   table4 <- na.omit(data.frame(state_name=temp$state_name,county_name=temp$county_name,
     state_fips=substr(temp$fips,1,2),county_fips=substr(temp$fips,3,5),
     epa_region=temp$epa_region,site=temp$site,dv=temp[,cur[1]]/1000,cbsa_name=temp$cbsa_name))
-  S <- ifelse(type == "DRAFT",10,9)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table4,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=729,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,31,15,47,15,63,15))
+  writeData(wb,sheet=9,x=table4,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=9,x=paste("AQS Data Retrieval:",aqs.date),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=9,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=9,years); set.footnote.dates(wb,sheet=9);
+  remove.extra.rows(wb,sheet=9,row.hts=c(15,31,15,47,15,63,15))
   
   ## Table 5: Monitor-level design values for the 2015 8-hour NAAQS
   temp <- dv.2015[which(!is.na(dv.2015[,paste("pct",dvyr1,dvyr3,sep=".")])),
-    c("state_name","county_name","cbsa_name","csa_name","naa_name","epa_region",
+    c("state_name","county_name","cbsa_name","csa_name","naa_name_2015","epa_region",
     "site","site_name","address","latitude","longitude",cur[1],cur[3],
     paste("pct",dvyr1,dvyr3,sep="."),paste("pct",c(dvyr1:dvyr3),sep="."),
     paste("max4",c(dvyr1:dvyr3),sep="."),paste("exc",c(dvyr1:dvyr3),sep="."))]
@@ -319,16 +294,14 @@ o3.dvtables <- function(years,step1.date,type="DRAFT") {
   temp[,ppb.cols] <- temp[,ppb.cols]/1000
   table5 <- temp[,c(1:11,24,25,14:23)]
   colnames(table5) <- gsub(".","_",colnames(table5),fixed=TRUE)
-  S <- ifelse(type == "DRAFT",11,10)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table5,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=1289,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,47,15,47,15,79,15))
+  writeData(wb,sheet=10,x=table5,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=10,x=paste("AQS Data Retrieval:",aqs.date),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=10,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=10,years); set.footnote.dates(wb,sheet=10);
+  remove.extra.rows(wb,sheet=10,row.hts=c(15,47,15,47,15,79,15))
   
   ## Table 6: Trends in monitor-level design values for the 2015 8-hour NAAQS
-  temp <- dv.2015[,c("state_name","county_name","cbsa_name","csa_name","naa_name",
+  temp <- dv.2015[,c("state_name","county_name","cbsa_name","csa_name","naa_name_2015",
     "epa_region","site","site_name","address","latitude","longitude",all)]
   temp[,grep("dv",colnames(temp))] <- mapply(function(dv,code) ifelse(code == "I",NA,dv),
     temp[,grep("dv",colnames(temp))],temp[,grep("code",colnames(temp))])
@@ -336,18 +309,16 @@ o3.dvtables <- function(years,step1.date,type="DRAFT") {
   table6 <- temp[which(counts > 0),-c(grep("code",colnames(temp)))]
   table6[,grep("dv",colnames(table6))] <- table6[,grep("dv",colnames(table6))]/1000
   colnames(table6) <- gsub(".","_",colnames(table6),fixed=TRUE)
-  S <- ifelse(type == "DRAFT",12,11)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table6,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=1359,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,31,15,47,15,79,15))
+  writeData(wb,sheet=11,x=table6,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=11,x=paste("AQS Data Retrieval:",aqs.date),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=11,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=11,years); set.footnote.dates(wb,sheet=11);
+  remove.extra.rows(wb,sheet=11,row.hts=c(15,31,15,47,15,79,15))
   
   ## Save DV tables in .Rdata format and write to Excel file
   file.rdata <- paste("dvtables",dvyr1,dvyr3,format(Sys.Date(),"%Y%m%d"),sep="_")
   file.xlsx <- paste("O3_DesignValues",dvyr1,dvyr3,type,format(Sys.Date(),"%m_%d_%y"),sep="_")
   save(list=ls(pattern="table"),file=paste(work.dir,file.rdata,".Rdata",sep=""))
-  saveWorkbook(dv.wb,file=paste(out.dir,file.xlsx,".xlsx",sep=""))
+  saveWorkbook(wb,file=paste(out.dir,file.xlsx,".xlsx",sep=""),overwrite=TRUE)
 }
 

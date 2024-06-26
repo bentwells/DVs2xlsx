@@ -1,5 +1,6 @@
 ## Format PM2.5 DV spreadsheets based on template file
-pm25.dvtables <- function(year,type="DRAFT") {
+pm25.dvtables <- function(year=as.numeric(format(Sys.Date(),"%Y"))-1,
+  type=ifelse(as.numeric(format(Sys.Date(),"%m")) < 5,"DRAFT","FINAL")) {
   
   ## Custom functions called within main function
   max.na <- function(x) ifelse(any(!is.na(x)),max(x,na.rm=TRUE),NA)
@@ -21,16 +22,15 @@ pm25.dvtables <- function(year,type="DRAFT") {
   
   ## Set up working environment
   source("C:/Users/bwells01/Documents/R/get_monitors.r")
-  source("C:/Users/bwells01/Documents/R/xlsx_dv_funs.r")
-  require(plyr); require(reshape2); require(xlsx);
-  step1.date <- format(Sys.Date(),"%d%b%y"); years <- c((year-11):year);
+  source("C:/Users/bwells01/Documents/R/openxlsx_dvfuns.r")
+  require(openxlsx); require(plyr); require(reshape2);
   dv.begin.date <- as.Date(paste(year-2,"01-01",sep="-"))
+  today <- format(Sys.Date(),"%x")
+  years <- c((year-11):year)
   
   ## Get DV input file and template file
   templates <- list.files("DVs2xlsx/templates")
-  template.file <- templates[intersect(grep("PM25",templates),grep(type,templates))]
-  dv.wb <- loadWorkbook(paste("DVs2xlsx/templates",template.file,sep="/"))
-  dv.sheets <- getSheets(dv.wb)
+  wb <- loadWorkbook(paste("DVs2xlsx/templates",templates[grep("PM25",templates)],sep="/"))
   
   ## Retrieve nonattainment area info from AQS
   naa.2012 <- get.naa.info(par=88101,psid=22)
@@ -46,6 +46,8 @@ pm25.dvtables <- function(year,type="DRAFT") {
   base_info <- monitors[!duplicated(monitors$id),c("epa_region","state_name","county_name",
     "cbsa_name","csa_name","site_name","address","latitude","longitude","naa_name_1997",
     "naa_name_2006","naa_name_2012")]
+  base_info$latitude <- as.numeric(base_info$latitude)
+  base_info$longitude <- as.numeric(base_info$longitude)
   mbd <- get.unique.dates(monitors$monitor_begin_date,monitors$id,first=TRUE)
   med <- get.unique.dates(monitors$monitor_end_date,monitors$id,first=FALSE)
   lsd <- get.unique.dates(monitors$last_sample_date,monitors$id,first=FALSE)
@@ -93,30 +95,22 @@ pm25.dvtables <- function(year,type="DRAFT") {
   combo_date <- sapply(substr(ids,1,9),function(x) ifelse(x %in% substr(combos$id,1,9),
     combos$combo_date[match(x,substr(combos$id,1,9))],ifelse(x %in% combos$combo_site,
     combos$combo_date[match(x,combos$combo_site)]," ")))
-  table0 <- data.frame(parameter="88101",site=substr(ids,1,9),poc=substr(ids,10,10),row.names=NULL)
-  if (type == "DRAFT") {
-    v_area <- ifelse(as.Date(mbd) >= as.Date(paste(year,"01-01",sep="-")) &
-      base_info$state_name %in% naa.states,"1"," ")
-    v_nonreg <- ifelse(nbd != " " & nrc == " " & as.Date(lsd) >= dv.begin.date,"1"," ")
-    v_nonref <- ifelse(non_ref != " " & nrc != "Y" & check.dates == TRUE &
-      as.Date(lsd) >= dv.begin.date,"1"," ")
-    v_closure <- ifelse(med == " " & nrc != "Y" & as.Date(lsd) >= dv.begin.date &
-      as.Date(lsd) <= as.Date(paste(year,"10-01",sep="-")),"1"," ")
-    v_spm <- ifelse(grepl("SPM",types) & nrc != "Y" & as.Date(lsd) >= dv.begin.date,
-      ifelse(med == " ",ifelse(as.Date(lsd) - as.Date(mbd) <= 730,"1"," "),
-      ifelse(as.Date(gsub(" ",as.character(Sys.Date()),med)) - as.Date(mbd) <= 730,"1"," "))," ")
-    v_combo <- ifelse(combo_site != " " & as.Date(gsub(" ","1999-01-01",combo_date)) >= dv.begin.date,"1"," ")
-    v_count <- (v_area != " ") + (v_nonreg != " ") + (v_nonref != " ") + (v_closure != " ") +
-      (v_spm != " ") + (v_combo != " ")
-    table0 <- cbind(table0,data.frame(v_count,v_area,v_nonreg,v_nonref,v_closure,v_spm,v_combo,row.names=NULL))
+  table0 <- data.frame(parameter="88101",site=substr(ids,1,9),poc=as.numeric(substr(ids,10,11)),
+    base_info,monitor_begin_date=mbd,monitor_end_date=med,last_sample_date=lsd,
+    primary_begin_date=pbd,primary_end_date=ped,nonreg_begin_date=nbd,nonreg_end_date=ned,
+    nonreg_concur=nrc,frm_fem,non_ref,combo_site,combo_date,agency,collection_frequency=cfr,
+    season_begin_date=sbd,season_end_date=sed,monitor_types=types,monitor_networks=nets,
+    measurement_scale=msc,monitor_objective=obj,row.names=NULL)
+  writeData(wb,sheet=15,x=table0,startCol=1,startRow=3,colNames=FALSE,rowNames=FALSE,na.string="")
+  clear.rows <- c((nrow(table0)+3):max(wb$worksheets[[15]]$sheet_data$rows))
+  removeRowHeights(wb,sheet=15,rows=clear.rows)
+  deleteData(wb,sheet=15,rows=clear.rows,cols=c(1:ncol(table0)),gridExpand=TRUE)
+  for (i in 1:ncol(table0)) {
+    addStyle(wb,sheet=15,style=createStyle(border=c("top","bottom","left","right"),borderStyle="none"),
+      rows=clear.rows,cols=i)
   }
-  table0 <- cbind(table0,data.frame(base_info,monitor_begin_date=mbd,monitor_end_date=med,
-    last_sample_date=lsd,primary_begin_date=pbd,primary_end_date=ped,nonreg_begin_date=nbd,
-    nonreg_end_date=ned,nonreg_concur=nrc,frm_fem,non_ref,combo_site,combo_date,agency,
-    collection_frequency=cfr,season_begin_date=sbd,season_end_date=sed,monitor_types=types,
-    monitor_networks=nets,measurement_scale=msc,monitor_objective=obj,row.names=NULL))
-  S <- ifelse(type == "DRAFT",1,length(dv.sheets))
-  df2xls(df=table0,sheet=dv.sheets[[S]],sr=3,sc=1)
+  addStyle(wb,sheet=15,style=createStyle(border="top",borderColour="black",borderStyle="thin"),
+    rows=min(clear.rows),cols=c(1:ncol(table0)))
   
   ## Pull annual and daily DVs from AQS, merge with site metadata
   t <- get.aqs.data(paste(
@@ -125,76 +119,87 @@ pm25.dvtables <- function(year,type="DRAFT") {
       AND dv_year <=",year,"
       AND edt_id IN (0,5)
       AND parameter_code = '88101'
-      AND pollutant_standard_id = 22
+      AND pollutant_standard_id = 27
       AND state_code NOT IN ('80','CC')
-    ORDER BY state_code, county_code, site_number, dv_year",sep=""))
+    ORDER BY state_code, county_code, site_number, dv_year",sep=""),dbname="aqsprod")
   write.csv(t,file=paste("DVs2xlsx/",year,"/PM25anndvs",year-9,"_",year,"_",
     format(Sys.Date(),"%Y%m%d"),".csv",sep=""),na="",row.names=FALSE)
   dva <- data.frame(site=paste(t$state_code,t$county_code,t$site_number,sep=""),
-    dv_year=t$dv_year,dv=t$design_value,valid=t$dv_validity_ind,
-    mean.yr1=t$year_2_arith_mean,mean.yr2=t$year_1_arith_mean,mean.yr3=t$dv_year_arith_mean,
-    qtrs.yr1=t$year_2_complete_quarters,qtrs.yr2=t$year_1_complete_quarters,qtrs.yr3=t$dv_year_complete_quarters,
-    mean.yr1.q1=t$yr2_q1_arith_mean,mean.yr1.q2=t$yr2_q2_arith_mean,mean.yr1.q3=t$yr2_q3_arith_mean,
-    mean.yr1.q4=t$yr2_q4_arith_mean,mean.yr2.q1=t$yr1_q1_arith_mean,mean.yr2.q2=t$yr1_q2_arith_mean,
-    mean.yr2.q3=t$yr1_q3_arith_mean,mean.yr2.q4=t$yr1_q4_arith_mean,mean.yr3.q1=t$dv_yr_q1_arith_mean,
-    mean.yr3.q2=t$dv_yr_q2_arith_mean,mean.yr3.q3=t$dv_yr_q3_arith_mean,mean.yr3.q4=t$dv_yr_q4_arith_mean,
-    obs.yr1.q1=t$yr2_q1_creditable_cnt,obs.yr1.q2=t$yr2_q2_creditable_cnt,obs.yr1.q3=t$yr2_q3_creditable_cnt,
-    obs.yr1.q4=t$yr2_q4_creditable_cnt,obs.yr2.q1=t$yr1_q1_creditable_cnt,obs.yr2.q2=t$yr1_q2_creditable_cnt,
-    obs.yr2.q3=t$yr1_q3_creditable_cnt,obs.yr2.q4=t$yr1_q4_creditable_cnt,obs.yr3.q1=t$dv_yr_q1_creditable_cnt,
-    obs.yr3.q2=t$dv_yr_q2_creditable_cnt,obs.yr3.q3=t$dv_yr_q3_creditable_cnt,obs.yr3.q4=t$dv_yr_q4_creditable_cnt,
-    pct.yr1.q1=pmin(round(100*t$yr2_q1_creditable_cnt/t$yr2_q1_scheduled_cnt),100),
-    pct.yr1.q2=pmin(round(100*t$yr2_q2_creditable_cnt/t$yr2_q2_scheduled_cnt),100),
-    pct.yr1.q3=pmin(round(100*t$yr2_q3_creditable_cnt/t$yr2_q3_scheduled_cnt),100),
-    pct.yr1.q4=pmin(round(100*t$yr2_q4_creditable_cnt/t$yr2_q4_scheduled_cnt),100),
-    pct.yr2.q1=pmin(round(100*t$yr1_q1_creditable_cnt/t$yr1_q1_scheduled_cnt),100),
-    pct.yr2.q2=pmin(round(100*t$yr1_q2_creditable_cnt/t$yr1_q2_scheduled_cnt),100),
-    pct.yr2.q3=pmin(round(100*t$yr1_q3_creditable_cnt/t$yr1_q3_scheduled_cnt),100),
-    pct.yr2.q4=pmin(round(100*t$yr1_q4_creditable_cnt/t$yr1_q4_scheduled_cnt),100),
-    pct.yr3.q1=pmin(round(100*t$dv_yr_q1_creditable_cnt/t$dv_yr_q1_scheduled_cnt),100),
-    pct.yr3.q2=pmin(round(100*t$dv_yr_q2_creditable_cnt/t$dv_yr_q2_scheduled_cnt),100),
-    pct.yr3.q3=pmin(round(100*t$dv_yr_q3_creditable_cnt/t$dv_yr_q3_scheduled_cnt),100),
-    pct.yr3.q4=pmin(round(100*t$dv_yr_q4_creditable_cnt/t$dv_yr_q4_scheduled_cnt),100),
-    obs.q1=t$q1_3yr_creditable_cnt,obs.q2=t$q2_3yr_creditable_cnt,
-    obs.q3=t$q3_3yr_creditable_cnt,obs.q4=t$q4_3yr_creditable_cnt,
-    max.q1=t$q1_3yr_maximum,max.q2=t$q2_3yr_maximum,max.q3=t$q3_3yr_maximum,max.q4=t$q4_3yr_maximum,
-    min.q1=t$q1_3yr_minimum,min.q2=t$q2_3yr_minimum,min.q3=t$q3_3yr_minimum,min.q4=t$q4_3yr_minimum)
+    dv_year=as.integer(t$dv_year),dv=as.numeric(t$design_value),valid=t$dv_validity_ind,
+    mean.yr1=as.numeric(t$year_2_arith_mean),mean.yr2=as.numeric(t$year_1_arith_mean),
+    mean.yr3=as.numeric(t$dv_year_arith_mean),qtrs.yr1=as.integer(t$year_2_complete_quarters),
+    qtrs.yr2=as.integer(t$year_1_complete_quarters),qtrs.yr3=as.integer(t$dv_year_complete_quarters),
+    mean.yr1.q1=as.numeric(t$yr2_q1_arith_mean),mean.yr1.q2=as.numeric(t$yr2_q2_arith_mean),
+    mean.yr1.q3=as.numeric(t$yr2_q3_arith_mean),mean.yr1.q4=as.numeric(t$yr2_q4_arith_mean),
+    mean.yr2.q1=as.numeric(t$yr1_q1_arith_mean),mean.yr2.q2=as.numeric(t$yr1_q2_arith_mean),
+    mean.yr2.q3=as.numeric(t$yr1_q3_arith_mean),mean.yr2.q4=as.numeric(t$yr1_q4_arith_mean),
+    mean.yr3.q1=as.numeric(t$dv_yr_q1_arith_mean),mean.yr3.q2=as.numeric(t$dv_yr_q2_arith_mean),
+    mean.yr3.q3=as.numeric(t$dv_yr_q3_arith_mean),mean.yr3.q4=as.numeric(t$dv_yr_q4_arith_mean),
+    obs.yr1.q1=as.integer(t$yr2_q1_creditable_cnt),obs.yr1.q2=as.integer(t$yr2_q2_creditable_cnt),
+    obs.yr1.q3=as.integer(t$yr2_q3_creditable_cnt),obs.yr1.q4=as.integer(t$yr2_q4_creditable_cnt),
+    obs.yr2.q1=as.integer(t$yr1_q1_creditable_cnt),obs.yr2.q2=as.integer(t$yr1_q2_creditable_cnt),
+    obs.yr2.q3=as.integer(t$yr1_q3_creditable_cnt),obs.yr2.q4=as.integer(t$yr1_q4_creditable_cnt),
+    obs.yr3.q1=as.integer(t$dv_yr_q1_creditable_cnt),obs.yr3.q2=as.integer(t$dv_yr_q2_creditable_cnt),
+    obs.yr3.q3=as.integer(t$dv_yr_q3_creditable_cnt),obs.yr3.q4=as.integer(t$dv_yr_q4_creditable_cnt),
+    pct.yr1.q1=pmin(round(100*as.integer(t$yr2_q1_creditable_cnt)/pmax(as.integer(t$yr2_q1_scheduled_cnt),1)),100),
+    pct.yr1.q2=pmin(round(100*as.integer(t$yr2_q2_creditable_cnt)/pmax(as.integer(t$yr2_q2_scheduled_cnt),1)),100),
+    pct.yr1.q3=pmin(round(100*as.integer(t$yr2_q3_creditable_cnt)/pmax(as.integer(t$yr2_q3_scheduled_cnt),1)),100),
+    pct.yr1.q4=pmin(round(100*as.integer(t$yr2_q4_creditable_cnt)/pmax(as.integer(t$yr2_q4_scheduled_cnt),1)),100),
+    pct.yr2.q1=pmin(round(100*as.integer(t$yr1_q1_creditable_cnt)/pmax(as.integer(t$yr1_q1_scheduled_cnt),1)),100),
+    pct.yr2.q2=pmin(round(100*as.integer(t$yr1_q2_creditable_cnt)/pmax(as.integer(t$yr1_q2_scheduled_cnt),1)),100),
+    pct.yr2.q3=pmin(round(100*as.integer(t$yr1_q3_creditable_cnt)/pmax(as.integer(t$yr1_q3_scheduled_cnt),1)),100),
+    pct.yr2.q4=pmin(round(100*as.integer(t$yr1_q4_creditable_cnt)/pmax(as.integer(t$yr1_q4_scheduled_cnt),1)),100),
+    pct.yr3.q1=pmin(round(100*as.integer(t$dv_yr_q1_creditable_cnt)/pmax(as.integer(t$dv_yr_q1_scheduled_cnt),1)),100),
+    pct.yr3.q2=pmin(round(100*as.integer(t$dv_yr_q2_creditable_cnt)/pmax(as.integer(t$dv_yr_q2_scheduled_cnt),1)),100),
+    pct.yr3.q3=pmin(round(100*as.integer(t$dv_yr_q3_creditable_cnt)/pmax(as.integer(t$dv_yr_q3_scheduled_cnt),1)),100),
+    pct.yr3.q4=pmin(round(100*as.integer(t$dv_yr_q4_creditable_cnt)/pmax(as.integer(t$dv_yr_q4_scheduled_cnt),1)),100),
+    obs.q1=as.integer(t$q1_3yr_creditable_cnt),obs.q2=as.integer(t$q2_3yr_creditable_cnt),
+    obs.q3=as.integer(t$q3_3yr_creditable_cnt),obs.q4=as.integer(t$q4_3yr_creditable_cnt),
+    max.q1=as.integer(t$q1_3yr_maximum),max.q2=as.integer(t$q2_3yr_maximum),
+    max.q3=as.integer(t$q3_3yr_maximum),max.q4=as.integer(t$q4_3yr_maximum),
+    min.q1=as.integer(t$q1_3yr_minimum),min.q2=as.integer(t$q2_3yr_minimum),
+    min.q3=as.integer(t$q3_3yr_minimum),min.q4=as.integer(t$q4_3yr_minimum))
   t <- get.aqs.data(paste(
   "SELECT * FROM EUV_PM25_24HR_DVS
     WHERE dv_year >=",years[3],"
       AND dv_year <=",year,"
       AND edt_id IN (0,5)
       AND parameter_code = '88101'
-      AND pollutant_standard_id = 21
+      AND pollutant_standard_id = 26
       AND state_code NOT IN ('80','CC')
-    ORDER BY state_code, county_code, site_number, dv_year",sep=""))
+    ORDER BY state_code, county_code, site_number, dv_year",sep=""),dbname="aqsprod")
   write.csv(t,file=paste("DVs2xlsx/",year,"/PM25_24hdvs",year-9,"_",year,"_",
     format(Sys.Date(),"%Y%m%d"),".csv",sep=""),na="",row.names=FALSE)
   dvd <- data.frame(site=paste(t$state_code,t$county_code,t$site_number,sep=""),
-    dv_year=t$dv_year,dv=t$daily_design_value,valid=t$dv_validity_ind,
-    p98.yr1=t$year_2_98th_percentile,p98.yr2=t$year_1_98th_percentile,p98.yr3=t$dv_year_98th_percentile,
-    qtrs.yr1=NA,qtrs.yr2=NA,qtrs.yr3=NA,
-    obs.yr1=t$year_2_creditable_cnt,obs.yr2=t$year_1_creditable_cnt,obs.yr3=t$dv_year_creditable_cnt,
-    obs.yr1.q1=t$yr2_q1_creditable_cnt,obs.yr1.q2=t$yr2_q2_creditable_cnt,obs.yr1.q3=t$yr2_q3_creditable_cnt,
-    obs.yr1.q4=t$yr2_q4_creditable_cnt,obs.yr2.q1=t$yr1_q1_creditable_cnt,obs.yr2.q2=t$yr1_q2_creditable_cnt,
-    obs.yr2.q3=t$yr1_q3_creditable_cnt,obs.yr2.q4=t$yr1_q4_creditable_cnt,obs.yr3.q1=t$dv_yr_q1_creditable_cnt,
-    obs.yr3.q2=t$dv_yr_q2_creditable_cnt,obs.yr3.q3=t$dv_yr_q3_creditable_cnt,obs.yr3.q4=t$dv_yr_q4_creditable_cnt,
-    pct.yr1.q1=pmin(round(100*t$yr2_q1_creditable_cnt/t$yr2_q1_scheduled_samples),100),
-    pct.yr1.q2=pmin(round(100*t$yr2_q2_creditable_cnt/t$yr2_q2_scheduled_samples),100),
-    pct.yr1.q3=pmin(round(100*t$yr2_q3_creditable_cnt/t$yr2_q3_scheduled_samples),100),
-    pct.yr1.q4=pmin(round(100*t$yr2_q4_creditable_cnt/t$yr2_q4_scheduled_samples),100),
-    pct.yr2.q1=pmin(round(100*t$yr1_q1_creditable_cnt/t$yr1_q1_scheduled_samples),100),
-    pct.yr2.q2=pmin(round(100*t$yr1_q2_creditable_cnt/t$yr1_q2_scheduled_samples),100),
-    pct.yr2.q3=pmin(round(100*t$yr1_q3_creditable_cnt/t$yr1_q3_scheduled_samples),100),
-    pct.yr2.q4=pmin(round(100*t$yr1_q4_creditable_cnt/t$yr1_q4_scheduled_samples),100),
-    pct.yr3.q1=pmin(round(100*t$dv_yr_q1_creditable_cnt/t$dv_yr_q1_scheduled_samples),100),
-    pct.yr3.q2=pmin(round(100*t$dv_yr_q2_creditable_cnt/t$dv_yr_q2_scheduled_samples),100),
-    pct.yr3.q3=pmin(round(100*t$dv_yr_q3_creditable_cnt/t$dv_yr_q3_scheduled_samples),100),
-    pct.yr3.q4=pmin(round(100*t$dv_yr_q4_creditable_cnt/t$dv_yr_q4_scheduled_samples),100),
-    obs.q1=t$yr2_q1_creditable_cnt+t$yr1_q1_creditable_cnt+t$dv_yr_q1_creditable_cnt,
-    obs.q2=t$yr2_q2_creditable_cnt+t$yr1_q2_creditable_cnt+t$dv_yr_q2_creditable_cnt,
-    obs.q3=t$yr2_q3_creditable_cnt+t$yr1_q3_creditable_cnt+t$dv_yr_q3_creditable_cnt,
-    obs.q4=t$yr2_q4_creditable_cnt+t$yr1_q4_creditable_cnt+t$dv_yr_q4_creditable_cnt,
-    max.q1=t$q1_3yr_max,max.q2=t$q2_3yr_max,max.q3=t$q3_3yr_max,max.q4=t$q4_3yr_max)
+    dv_year=as.integer(t$dv_year),dv=as.numeric(t$daily_design_value),valid=t$dv_validity_ind,
+    p98.yr1=as.numeric(t$year_2_98th_percentile),p98.yr2=as.numeric(t$year_1_98th_percentile),
+    p98.yr3=as.numeric(t$dv_year_98th_percentile),qtrs.yr1=NA,qtrs.yr2=NA,qtrs.yr3=NA,
+    obs.yr1=as.integer(t$year_2_creditable_cnt),obs.yr2=as.integer(t$year_1_creditable_cnt),
+    obs.yr3=as.integer(t$dv_year_creditable_cnt),obs.yr1.q1=as.integer(t$yr2_q1_creditable_cnt),
+    obs.yr1.q2=as.integer(t$yr2_q2_creditable_cnt),obs.yr1.q3=as.integer(t$yr2_q3_creditable_cnt),
+    obs.yr1.q4=as.integer(t$yr2_q4_creditable_cnt),obs.yr2.q1=as.integer(t$yr1_q1_creditable_cnt),
+    obs.yr2.q2=as.integer(t$yr1_q2_creditable_cnt),obs.yr2.q3=as.integer(t$yr1_q3_creditable_cnt),
+    obs.yr2.q4=as.integer(t$yr1_q4_creditable_cnt),obs.yr3.q1=as.integer(t$dv_yr_q1_creditable_cnt),
+    obs.yr3.q2=as.integer(t$dv_yr_q2_creditable_cnt),obs.yr3.q3=as.integer(t$dv_yr_q3_creditable_cnt),
+    obs.yr3.q4=as.integer(t$dv_yr_q4_creditable_cnt),
+    pct.yr1.q1=pmin(round(100*as.integer(t$yr2_q1_creditable_cnt)/pmax(as.integer(t$yr2_q1_scheduled_samples),1)),100),
+    pct.yr1.q2=pmin(round(100*as.integer(t$yr2_q2_creditable_cnt)/pmax(as.integer(t$yr2_q2_scheduled_samples),1)),100),
+    pct.yr1.q3=pmin(round(100*as.integer(t$yr2_q3_creditable_cnt)/pmax(as.integer(t$yr2_q3_scheduled_samples),1)),100),
+    pct.yr1.q4=pmin(round(100*as.integer(t$yr2_q4_creditable_cnt)/pmax(as.integer(t$yr2_q4_scheduled_samples),1)),100),
+    pct.yr2.q1=pmin(round(100*as.integer(t$yr1_q1_creditable_cnt)/pmax(as.integer(t$yr1_q1_scheduled_samples),1)),100),
+    pct.yr2.q2=pmin(round(100*as.integer(t$yr1_q2_creditable_cnt)/pmax(as.integer(t$yr1_q2_scheduled_samples),1)),100),
+    pct.yr2.q3=pmin(round(100*as.integer(t$yr1_q3_creditable_cnt)/pmax(as.integer(t$yr1_q3_scheduled_samples),1)),100),
+    pct.yr2.q4=pmin(round(100*as.integer(t$yr1_q4_creditable_cnt)/pmax(as.integer(t$yr1_q4_scheduled_samples),1)),100),
+    pct.yr3.q1=pmin(round(100*as.integer(t$dv_yr_q1_creditable_cnt)/pmax(as.integer(t$dv_yr_q1_scheduled_samples),1)),100),
+    pct.yr3.q2=pmin(round(100*as.integer(t$dv_yr_q2_creditable_cnt)/pmax(as.integer(t$dv_yr_q2_scheduled_samples),1)),100),
+    pct.yr3.q3=pmin(round(100*as.integer(t$dv_yr_q3_creditable_cnt)/pmax(as.integer(t$dv_yr_q3_scheduled_samples),1)),100),
+    pct.yr3.q4=pmin(round(100*as.integer(t$dv_yr_q4_creditable_cnt)/pmax(as.integer(t$dv_yr_q4_scheduled_samples),1)),100),
+    obs.q1=as.integer(t$yr2_q1_creditable_cnt)+as.integer(t$yr1_q1_creditable_cnt)+as.integer(t$dv_yr_q1_creditable_cnt),
+    obs.q2=as.integer(t$yr2_q2_creditable_cnt)+as.integer(t$yr1_q2_creditable_cnt)+as.integer(t$dv_yr_q2_creditable_cnt),
+    obs.q3=as.integer(t$yr2_q3_creditable_cnt)+as.integer(t$yr1_q3_creditable_cnt)+as.integer(t$dv_yr_q3_creditable_cnt),
+    obs.q4=as.integer(t$yr2_q4_creditable_cnt)+as.integer(t$yr1_q4_creditable_cnt)+as.integer(t$dv_yr_q4_creditable_cnt),
+    max.q1=as.numeric(t$q1_3yr_max),max.q2=as.numeric(t$q2_3yr_max),
+    max.q3=as.numeric(t$q3_3yr_max),max.q4=as.numeric(t$q4_3yr_max))
   dvd$qtrs.yr1 <- apply(dvd[,c("pct.yr1.q1","pct.yr1.q2","pct.yr1.q3","pct.yr1.q4")],1,
     function(x) ifelse(all(is.na(x)),NA,sum(x >= 75,na.rm=TRUE)))
   dvd$qtrs.yr2 <- apply(dvd[,c("pct.yr2.q1","pct.yr2.q2","pct.yr2.q3","pct.yr2.q4")],1,
@@ -212,13 +217,10 @@ pm25.dvtables <- function(year,type="DRAFT") {
   table1a$met_naaqs <- sapply(table1a$dv,function(x) 
     ifelse(is.na(x),"Incomplete",ifelse(x > 12,"No","Yes")))
   table1a <- table1a[,c("naa_name","epa_regions","status","dv","met_naaqs","cdd_date","redesignation_date")]
-  S <- ifelse(type == "DRAFT",2,1)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table1a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=16,col=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=20,col=1)
+  writeData(wb,sheet=1,x=table1a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=1,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),today)),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=1,years); set.footnote.dates(wb,sheet=1);
   
   ## Table 1b. NAA Status 24-hour 2006
   t <- subset(dvs.24h,naa_name_2006 != " " & dv_year == year & valid == "Y",c("naa_name_2006","dv"))
@@ -227,13 +229,10 @@ pm25.dvtables <- function(year,type="DRAFT") {
   table1b$met_naaqs <- sapply(table1b$dv,function(x) 
     ifelse(is.na(x),"Incomplete",ifelse(x > 35,"No","Yes")))
   table1b <- table1b[,c("naa_name","epa_regions","status","dv","met_naaqs","cdd_date","redesignation_date")]
-  S <- ifelse(type == "DRAFT",3,2)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table1b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=39,col=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=43,col=1)
+  writeData(wb,sheet=2,x=table1b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=2,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),today)),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=2,years); set.footnote.dates(wb,sheet=2);
   
   ## Table 1c. NAA Status Annual 1997
   t <- subset(dvs.ann,naa_name_1997 != " " & dv_year == year & valid == "Y",c("naa_name_1997","dv"))
@@ -242,13 +241,10 @@ pm25.dvtables <- function(year,type="DRAFT") {
   table1c$met_naaqs <- sapply(table1c$dv,function(x) 
     ifelse(is.na(x),"Incomplete",ifelse(x > 15,"No","Yes")))
   table1c <- table1c[,c("naa_name","epa_regions","status","dv","met_naaqs","cdd_date","redesignation_date")]
-  S <- ifelse(type == "DRAFT",4,3)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table1c,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=46,col=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=50,col=1)
+  writeData(wb,sheet=3,x=table1c,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=3,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),today)),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=3,years); set.footnote.dates(wb,sheet=3);
   
   ## Table 2a. Other Violators Annual
   t <- subset(dvs.ann,naa_name_2012 == " " & dv_year == year & dv > 12 & valid == "Y")
@@ -257,12 +253,11 @@ pm25.dvtables <- function(year,type="DRAFT") {
     table2a <- data.frame(x=paste("There were no sites violating the 2012 Annual PM2.5 NAAQS in ",
       (year-2),"-",year,".",sep=""))
   }
-  S <- ifelse(type == "DRAFT",5,4)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table2a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=29,col=1)
+  writeData(wb,sheet=4,x=table2a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=4,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=4,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=4,years); set.footnote.dates(wb,sheet=4);
+  remove.extra.rows(wb,sheet=4,row.hts=c(15,34,15,47,15,63,15))
   
   ## Table 2b. Other Violators 24-hour
   t <- subset(dvs.24h,naa_name_2006 == " " & dv_year == year & dv > 35 & valid == "Y")
@@ -271,13 +266,11 @@ pm25.dvtables <- function(year,type="DRAFT") {
     table2b <- data.frame(x=paste("There were no sites violating the 2006 24-hour PM2.5 NAAQS in ",
       (year-2),"-",year,".",sep=""))
   }
-  S <- ifelse(type == "DRAFT",6,5)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table2b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=89,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,31,15,47,15,63,15))
+  writeData(wb,sheet=5,x=table2b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=5,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=5,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=5,years); set.footnote.dates(wb,sheet=5);
+  remove.extra.rows(wb,sheet=5,row.hts=c(15,34,15,47,15,63,15))
   
   ## Table 3a. NAA Trends Annual 2012
   temp <- subset(dvs.ann,naa_name_2012 != " " & valid == "Y")
@@ -291,12 +284,10 @@ pm25.dvtables <- function(year,type="DRAFT") {
       table3a[i,paste("dv",(y-2),y,sep="_")] <- max(v$dv)
     }
   }
-  S <- ifelse(type == "DRAFT",7,6)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table3a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=18,col=1)
+  writeData(wb,sheet=6,x=table3a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=6,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),today)),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=6,years); set.footnote.dates(wb,sheet=6);
   
   ## Table 3b. NAA Trends 24-hour 2006
   temp <- subset(dvs.24h,naa_name_2006 != " " & valid == "Y")
@@ -310,12 +301,10 @@ pm25.dvtables <- function(year,type="DRAFT") {
       table3b[i,paste("dv",(y-2),y,sep="_")] <- max(v$dv)
     }
   }
-  S <- ifelse(type == "DRAFT",8,7)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table3b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=41,col=1)
+  writeData(wb,sheet=7,x=table3b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=7,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),today)),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=7,years); set.footnote.dates(wb,sheet=7);
   
   ## Table 3c. NAA Trends Annual 1997
   temp <- subset(dvs.ann,naa_name_1997 != " " & valid == "Y")
@@ -329,12 +318,10 @@ pm25.dvtables <- function(year,type="DRAFT") {
       table3c[i,paste("dv",(y-2),y,sep="_")] <- max(v$dv)
     }
   }
-  S <- ifelse(type == "DRAFT",9,8)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=2)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table3c,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=48,col=1)
+  writeData(wb,sheet=8,x=table3c,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=8,x=t(paste(c("AQS Data Retrieval:","Last Updated:"),today)),
+    startCol=1,startRow=2,colNames=FALSE,rowNames=FALSE,na.string="")
+  set.year.values(wb,sheet=8,years); set.footnote.dates(wb,sheet=8);
   
   ## Table 4a. County Status Annual
   t <- subset(dvs.ann,dv_year == year & valid == "Y",
@@ -345,13 +332,11 @@ pm25.dvtables <- function(year,type="DRAFT") {
     state_fips=substr(t$fips,1,2),county_fips=substr(t$fips,3,5),epa_region=t$epa_region,
     site=t$site,dv=t$dv,cbsa_name=t$cbsa_name)
   table4a <- table4a[order(table4a$state_name,table4a$county_name),]
-  S <- ifelse(type == "DRAFT",10,9)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table4a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=559,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,31,15,47,15,79,15))
+  writeData(wb,sheet=9,x=table4a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=9,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=9,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=9,years); set.footnote.dates(wb,sheet=9);
+  remove.extra.rows(wb,sheet=9,row.hts=c(15,34,15,47,15,63,15))
   
   ## Table 4b. County Status 24-hour
   t <- subset(dvs.24h,dv_year == year & valid == "Y",
@@ -362,13 +347,11 @@ pm25.dvtables <- function(year,type="DRAFT") {
     state_fips=substr(t$fips,1,2),county_fips=substr(t$fips,3,5),epa_region=t$epa_region,
     site=t$site,dv=t$dv,cbsa_name=t$cbsa_name)
   table4b <- table4b[order(table4b$state_name,table4b$county_name),]
-  S <- ifelse(type == "DRAFT",11,10)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table4b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=559,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,31,15,47,15,79,15))
+  writeData(wb,sheet=10,x=table4b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=10,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=10,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=10,years); set.footnote.dates(wb,sheet=10);
+  remove.extra.rows(wb,sheet=10,row.hts=c(15,34,15,47,15,63,15))
   
   ## Table 5a. Site Status Annual
   t <- subset(dvs.ann,dv_year == year)
@@ -380,13 +363,11 @@ pm25.dvtables <- function(year,type="DRAFT") {
     paste(rep(c("mean","obs","pct"),each=12),rep(paste("yr",1:3,sep=""),each=4,times=3),
       rep(paste("q",1:4,sep=""),times=9),sep="."),
     paste(rep(c("obs","max","min"),each=4),rep(paste("q",1:4,sep=""),times=3),sep="."))]
-  S <- ifelse(type == "DRAFT",12,11)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table5a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=1059,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,31,15,47,15,79,15))
+  writeData(wb,sheet=11,x=table5a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=11,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=11,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=11,years); set.footnote.dates(wb,sheet=11);
+  remove.extra.rows(wb,sheet=11,row.hts=c(15,34,15,47,15,79,15))
   
   ## Table 5b. Site Status 24-hour
   t <- subset(dvs.24h,dv_year == year)
@@ -398,13 +379,11 @@ pm25.dvtables <- function(year,type="DRAFT") {
     paste(rep(c("obs","pct"),each=12),rep(paste("yr",1:3,sep=""),each=4,times=2),
       rep(paste("q",1:4,sep=""),times=6),sep="."),
     paste(rep(c("obs","max"),each=4),rep(paste("q",1:4,sep=""),times=2),sep="."))]
-  S <- ifelse(type == "DRAFT",13,12)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table5b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=1059,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,47,15,47,15,79,15))
+  writeData(wb,sheet=12,x=table5b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=12,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=12,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=12,years); set.footnote.dates(wb,sheet=12);
+  remove.extra.rows(wb,sheet=12,row.hts=c(15,34,15,47,15,79,15))
   
   ## Table 6a. Site Trends Annual
   t <- dcast(subset(dvs.ann,valid == "Y"),site ~ dv_year,value.var="dv")
@@ -413,13 +392,11 @@ pm25.dvtables <- function(year,type="DRAFT") {
   table6a <- vals[,c("state_name","county_name","cbsa_name","csa_name","naa_name_2012",
     "naa_name_1997","epa_region","site","site_name","address","latitude","longitude",
      paste("dv",years[1:10],years[3:12],sep="_"))]
-  S <- ifelse(type == "DRAFT",14,13)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table6a,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=1109,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,31,15,47,15,79,15))
+  writeData(wb,sheet=13,x=table6a,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=13,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=13,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=13,years); set.footnote.dates(wb,sheet=13);
+  remove.extra.rows(wb,sheet=13,row.hts=c(15,34,15,47,15,79,15))
   
   ## Table 6b. Site Trends 24-hour
   t <- dcast(subset(dvs.24h,valid == "Y"),site ~ dv_year,value.var="dv")
@@ -428,15 +405,14 @@ pm25.dvtables <- function(year,type="DRAFT") {
   table6b <- vals[,c("state_name","county_name","cbsa_name","csa_name","naa_name_2006",
     "epa_region","site","site_name","address","latitude","longitude",
      paste("dv",years[1:10],years[3:12],sep="_"))]
-  S <- ifelse(type == "DRAFT",15,14)
-  set.aqs.date(dv.sheets[[S]],step1.date,row=2,col=1)
-  set.last.update(dv.sheets[[S]],row=2,col=3)
-  set.year.values(dv.sheets[[S]],years,row=4)
-  df2xls(df=table6b,sheet=dv.sheets[[S]],sr=5,sc=1)
-  set.footnote.date(dv.sheets[[S]],step1.date,row=1109,col=1)
-  remove.extra.rows(dv.wb,dv.sheets[[S]],row.hts=c(15,31,15,47,15,79,15))
+  writeData(wb,sheet=14,x=table6b,startCol=1,startRow=5,colNames=FALSE,na.string="")
+  writeData(wb,sheet=14,x=paste("AQS Data Retrieval:",today),startCol=1,startRow=2,colNames=FALSE)
+  writeData(wb,sheet=14,x=paste("Last Updated:",today),startCol=3,startRow=2,colNames=FALSE)
+  set.year.values(wb,sheet=14,years); set.footnote.dates(wb,sheet=14);
+  remove.extra.rows(wb,sheet=14,row.hts=c(15,34,15,47,15,79,15))
   
   ## Write DV tables to Excel File
+  fix.scripts(wb)
   file.xlsx <- paste("PM25_DesignValues",(year-2),year,type,format(Sys.Date(),"%m_%d_%y"),sep="_")
-  saveWorkbook(dv.wb,file=paste("DVs2xlsx/",year,"/",file.xlsx,".xlsx",sep=""))
+  saveWorkbook(wb,file=paste("DVs2xlsx/",year,"/",file.xlsx,".xlsx",sep=""),overwrite=TRUE)
 }
