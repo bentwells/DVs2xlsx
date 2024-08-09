@@ -354,7 +354,7 @@ pm25.dvtables <- function(year=as.numeric(format(Sys.Date(),"%Y"))-1,
   remove.extra.rows(wb,sheet=10,row.hts=c(15,34,15,47,15,63,15))
   
   ## Table 5a. Site Status Annual
-  t <- subset(dvs.ann,dv_year == year)
+  t <- subset(dvs.ann,dv_year == year & obs.q1 + obs.q2 + obs.q3 + obs.q4 > 0)
   t$valid_dv <- mapply(function(dv,valid) ifelse(valid == "Y",dv,NA),t$dv,t$valid)
   t$invalid_dv <- mapply(function(dv,valid) ifelse(valid == "N",dv,NA),t$dv,t$valid)
   table5a <- t[,c("state_name","county_name","cbsa_name","csa_name","naa_name_2012","naa_name_1997",
